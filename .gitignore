@@ -1,0 +1,21 @@
+# Build output
+target/
+out/
+build/
+
+# Java and Maven transient files
+*.class
+*.log
+*.tmp
+.flattened-pom.xml
+
+# IDE files
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+
+# OS files
+.DS_Store
+Thumbs.db
