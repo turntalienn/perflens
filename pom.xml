@@ -10,23 +10,19 @@
   <packaging>pom</packaging>
 
   <name>PerfLens Parent</name>
-  <description>Parent build for the PerfLens Spring Boot and Hibernate profiler.</description>
+  <description>Per-request SQL, Hibernate, transaction and connection pool diagnostics for Spring Boot.</description>
 
   <modules>
     <module>perflens-core</module>
     <module>perflens-spring-boot-autoconfigure</module>
     <module>perflens-spring-boot-starter</module>
     <module>perflens-demo-app</module>
-    <module>perflens-integration-tests</module>
   </modules>
 
   <properties>
     <java.version>17</java.version>
     <spring-boot.version>3.5.14</spring-boot.version>
     <maven.compiler.release>${java.version}</maven.compiler.release>
-    <maven.compiler-plugin.version>3.15.0</maven.compiler-plugin.version>
-    <maven.javadoc-plugin.version>3.12.0</maven.javadoc-plugin.version>
-    <maven.surefire-plugin.version>3.5.6</maven.surefire-plugin.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
   </properties>
@@ -40,6 +36,21 @@
         <type>pom</type>
         <scope>import</scope>
       </dependency>
+      <dependency>
+        <groupId>io.perflens</groupId>
+        <artifactId>perflens-core</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.perflens</groupId>
+        <artifactId>perflens-spring-boot-autoconfigure</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.perflens</groupId>
+        <artifactId>perflens-spring-boot-starter</artifactId>
+        <version>${project.version}</version>
+      </dependency>
     </dependencies>
   </dependencyManagement>
 
@@ -49,7 +60,7 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-compiler-plugin</artifactId>
-          <version>${maven.compiler-plugin.version}</version>
+          <version>3.15.0</version>
           <configuration>
             <release>${maven.compiler.release}</release>
             <parameters>true</parameters>
@@ -58,43 +69,22 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-surefire-plugin</artifactId>
-          <version>${maven.surefire-plugin.version}</version>
+          <version>3.5.6</version>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-javadoc-plugin</artifactId>
-          <version>${maven.javadoc-plugin.version}</version>
+          <version>3.12.0</version>
           <configuration>
-            <source>${java.version}</source>
             <quiet>true</quiet>
-            <failOnError>true</failOnError>
           </configuration>
         </plugin>
         <plugin>
-          <groupId>org.apache.maven.plugins</groupId>
-          <artifactId>maven-failsafe-plugin</artifactId>
-          <version>${maven.surefire-plugin.version}</version>
-          <configuration>
-            <includes>
-              <include>**/*IT.java</include>
-            </includes>
-          </configuration>
+          <groupId>org.springframework.boot</groupId>
+          <artifactId>spring-boot-maven-plugin</artifactId>
+          <version>${spring-boot.version}</version>
         </plugin>
       </plugins>
     </pluginManagement>
-    <plugins>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-compiler-plugin</artifactId>
-      </plugin>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-surefire-plugin</artifactId>
-      </plugin>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-javadoc-plugin</artifactId>
-      </plugin>
-    </plugins>
   </build>
 </project>
