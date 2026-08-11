@@ -12,14 +12,9 @@
 
   <artifactId>perflens-core</artifactId>
   <name>PerfLens Core</name>
-  <description>Shared PerfLens contracts and utilities.</description>
+  <description>Framework-neutral trace model, collectors API and analyzers. No runtime dependencies.</description>
 
   <dependencies>
-    <dependency>
-      <groupId>com.fasterxml.jackson.core</groupId>
-      <artifactId>jackson-databind</artifactId>
-      <optional>true</optional>
-    </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
