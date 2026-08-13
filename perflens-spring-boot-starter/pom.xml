@@ -12,18 +12,12 @@
 
   <artifactId>perflens-spring-boot-starter</artifactId>
   <name>PerfLens Spring Boot Starter</name>
-  <description>Dependency-only starter for PerfLens Spring Boot applications.</description>
+  <description>Add this one dependency to a Spring Boot application to enable PerfLens.</description>
 
   <dependencies>
     <dependency>
       <groupId>io.perflens</groupId>
-      <artifactId>perflens-core</artifactId>
-      <version>${project.version}</version>
-    </dependency>
-    <dependency>
-      <groupId>io.perflens</groupId>
       <artifactId>perflens-spring-boot-autoconfigure</artifactId>
-      <version>${project.version}</version>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
