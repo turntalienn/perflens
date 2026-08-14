@@ -7,16 +7,22 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a Spring controller or service method as eligible for PerfLens tracing.
+ * Marks a controller or Spring bean method (or every method of a class) as a traced boundary.
  *
- * <p>The annotation itself does not force tracing to run. PerfLens still checks
- * its runtime control source before opening a root trace. This keeps production
- * adoption safe because teams can annotate important APIs during development and
- * enable individual targets later through operational controls.</p>
+ * <p>On a controller handler the trace covers the whole request, including view
+ * rendering and lazy loading during serialization. On any other Spring bean the
+ * method becomes a child span when a trace is already open, or opens its own
+ * trace otherwise.</p>
  *
- * <p>The {@link #value()} is intentionally explicit instead of being inferred
- * from a route or method name. Stable keys make it possible to rename Java
- * methods or move endpoints without losing report history.</p>
+ * <p>The annotation alone does not switch tracing on. The key must also be enabled,
+ * either through {@code perflens.control.targets} or the {@code perflens_control}
+ * table, so annotations can ship to every environment and be turned on where needed.</p>
+ *
+ * <pre>{@code
+ * @GetMapping("/orders/{id}")
+ * @PerfLensTrace("order-detail")
+ * OrderDto order(@PathVariable long id) { ... }
+ * }</pre>
  */
 @Documented
 @Retention(RetentionPolicy.RUNTIME)
@@ -24,16 +30,17 @@ import java.lang.annotation.Target;
 public @interface PerfLensTrace {
 
     /**
-     * Stable operational key used by PerfLens control rows and reports.
+     * Stable key used to enable the trace and to group reports. Kept explicit so
+     * renaming a method or moving a route does not break report history.
      *
-     * @return a non-empty target key such as {@code order-detail}
+     * @return target key such as {@code order-detail}
      */
     String value();
 
     /**
-     * Optional human-readable label shown in reports.
+     * Optional display name for reports; the key is shown when empty.
      *
-     * @return display label, or an empty string when the key should be shown
+     * @return display label
      */
     String label() default "";
 }

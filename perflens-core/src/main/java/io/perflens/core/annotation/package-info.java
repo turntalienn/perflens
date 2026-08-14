@@ -1,4 +1,4 @@
 /**
- * Public annotations used by application code to mark traceable boundaries.
+ * Annotations application code uses to mark traced boundaries.
  */
 package io.perflens.core.annotation;
