@@ -1,34 +1,36 @@
 package io.perflens.core.context;
 
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
- * Produces a stable grouping key for SQL statements.
+ * Reduces SQL to its shape so executions that differ only in literal values group together.
  *
- * <p>The normalizer is intentionally conservative. It replaces common literal
- * values with placeholders and collapses whitespace, which is enough to group
- * many repeated query shapes without attempting to parse vendor-specific SQL.</p>
+ * <p>String and numeric literals become {@code ?}, IN-lists of any length become
+ * {@code in (?)}, and whitespace is collapsed. It is a regex pass, not a parser, so
+ * exotic vendor syntax may not normalize perfectly; that only affects grouping.</p>
  */
 public final class SqlNormalizer {
+
+    private static final Pattern STRING_LITERAL = Pattern.compile("'(?:[^']|'')*'");
+    private static final Pattern NUMBER_LITERAL = Pattern.compile("\\b\\d+(?:\\.\\d+)?\\b");
+    private static final Pattern IN_LIST = Pattern.compile("(?i)\\bin\\s*\\(\\s*\\?(?:\\s*,\\s*\\?)*\\s*\\)");
+    private static final Pattern WHITESPACE = Pattern.compile("\\s+");
 
     private SqlNormalizer() {
     }
 
     /**
-     * Normalizes SQL for grouping repeated query shapes.
-     *
-     * @param sql SQL text captured from JDBC
-     * @return normalized SQL text, never {@code null}
+     * @param sql raw SQL, may be {@code null}
+     * @return lower-cased normalized SQL, never {@code null}
      */
     public static String normalize(String sql) {
         if (sql == null || sql.isBlank()) {
             return "";
         }
-        return sql
-                .replaceAll("'([^']|'')*'", "?")
-                .replaceAll("\\b\\d+(\\.\\d+)?\\b", "?")
-                .replaceAll("\\s+", " ")
-                .trim()
-                .toLowerCase(Locale.ROOT);
+        String normalized = STRING_LITERAL.matcher(sql).replaceAll("?");
+        normalized = NUMBER_LITERAL.matcher(normalized).replaceAll("?");
+        normalized = IN_LIST.matcher(normalized).replaceAll("in (?)");
+        return WHITESPACE.matcher(normalized).replaceAll(" ").trim().toLowerCase(Locale.ROOT);
     }
 }
