@@ -1,8 +1,9 @@
 /**
- * Trace context and immutable evidence objects produced during one profiled call.
+ * Thread-bound trace context and the immutable events and reports it produces.
  *
- * <p>The context is thread-bound, while the report objects are immutable. This
- * split keeps runtime collection fast and makes persisted reports safe to pass to
- * storage, viewers, and future exporters.</p>
+ * <p>Collectors (the JDBC proxy, the Hibernate listener) call the static
+ * {@code record*} methods on {@link io.perflens.core.context.PerfLensTraceContext}.
+ * Those calls are no-ops unless a trace is open on the current thread, so the
+ * collectors can stay installed permanently.</p>
  */
 package io.perflens.core.context;
