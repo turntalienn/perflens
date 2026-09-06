@@ -1,8 +1,8 @@
 /**
- * Core PerfLens contracts shared by all runtime integrations.
+ * Framework-neutral PerfLens API: the {@code @PerfLensTrace} annotation, the trace
+ * model, and the analyzers that turn captured events into findings.
  *
- * <p>This package is intentionally small and Spring-free. Applications and
- * integrations can depend on it for stable annotation, trace model, and finding
- * APIs without pulling in Spring Boot auto-configuration.</p>
+ * <p>This module has no runtime dependencies. Domain or service modules can depend
+ * on it to place annotations without pulling in Spring Boot.</p>
  */
 package io.perflens.core;
