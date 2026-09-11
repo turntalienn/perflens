@@ -2,91 +2,88 @@ package io.perflens.autoconfigure;
 
 import io.perflens.core.annotation.PerfLensTrace;
 import io.perflens.core.context.PerfLensTraceContext;
-import io.perflens.core.context.TraceReport;
 import io.perflens.core.model.TraceBoundary;
 import java.lang.reflect.Method;
-import java.time.Clock;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
 import org.springframework.core.annotation.AnnotatedElementUtils;
+import org.springframework.core.annotation.Order;
 
 /**
- * Spring AOP adapter for service-method PerfLens spans.
+ * Traces {@code @PerfLensTrace} methods on Spring beans.
  *
- * <p>When an annotated service method runs inside a controller trace, the method
- * becomes a child span. When it runs without a current trace, PerfLens checks the
- * DB control row and may open a method-root trace.</p>
+ * <p>Inside an open trace the method becomes a child span. Outside one, it opens
+ * its own trace if its key is enabled, which covers scheduled jobs and message
+ * listeners. The aspect is ordered ahead of {@code @Transactional}, so a
+ * method-level trace includes the commit.</p>
+ *
+ * <p>Normal Spring proxy rules apply: calls from one method to another on the same
+ * bean bypass the proxy and are not traced separately.</p>
  */
 @Aspect
 @Order(Ordered.HIGHEST_PRECEDENCE + 20)
-public final class PerfLensTraceAspect {
+final class PerfLensTraceAspect {
 
-    private final PerfLensControlService controlService;
-    private final PerfLensTraceStore traceStore;
-    private final Clock clock;
+    private final PerfLensTracer tracer;
 
-    public PerfLensTraceAspect(PerfLensControlService controlService, PerfLensTraceStore traceStore, Clock clock) {
-        this.controlService = controlService;
-        this.traceStore = traceStore;
-        this.clock = clock;
+    PerfLensTraceAspect(PerfLensTracer tracer) {
+        this.tracer = tracer;
     }
 
-    @Around("@annotation(io.perflens.core.annotation.PerfLensTrace) || "
-            + "@within(io.perflens.core.annotation.PerfLensTrace)")
-    public Object traceMethod(ProceedingJoinPoint joinPoint) throws Throwable {
-        PerfLensTrace trace = traceAnnotation(joinPoint);
-        if (trace == null) {
+    @Around("@annotation(io.perflens.core.annotation.PerfLensTrace) "
+            + "|| @within(io.perflens.core.annotation.PerfLensTrace)")
+    Object trace(ProceedingJoinPoint joinPoint) throws Throwable {
+        PerfLensTrace annotation = annotationOf(joinPoint);
+        if (annotation == null) {
             return joinPoint.proceed();
         }
-        if (PerfLensTraceContext.currentTrace().isPresent()) {
-            PerfLensTraceContext.startChildSpan(trace.value(), label(trace), TraceBoundary.SERVICE_METHOD, clock);
-            try {
-                return joinPoint.proceed();
-            }
-            finally {
-                PerfLensTraceContext.closeCurrentSpan(clock);
-            }
+        if (PerfLensTraceContext.isActive()) {
+            return proceedInSpan(joinPoint, annotation);
         }
-        if (!controlService.isEnabled(trace.value())) {
+        if (!tracer.startRoot(annotation, TraceBoundary.SERVICE_METHOD, null, null)) {
             return joinPoint.proceed();
         }
-        PerfLensTraceContext.startRoot(trace.value(), label(trace), TraceBoundary.SERVICE_METHOD, null, null, clock);
+        Throwable failure = null;
         try {
-            Object result = joinPoint.proceed();
-            TraceReport report = PerfLensTraceContext.closeRoot(null, null, clock);
-            traceStore.save(report);
-            return result;
+            return joinPoint.proceed();
         }
         catch (Throwable ex) {
-            TraceReport report = PerfLensTraceContext.closeRoot(null, ex.getClass().getName(), clock);
-            traceStore.save(report);
+            failure = ex;
             throw ex;
+        }
+        finally {
+            tracer.finishRoot(null, failure);
         }
     }
 
-    private String label(PerfLensTrace trace) {
-        return trace.label().isBlank() ? trace.value() : trace.label();
+    /** Opens a child span, unless this is the controller method whose request trace is already open. */
+    private Object proceedInSpan(ProceedingJoinPoint joinPoint, PerfLensTrace annotation) throws Throwable {
+        if (PerfLensTraceContext.currentSpanKey().filter(annotation.value()::equals).isPresent()) {
+            return joinPoint.proceed();
+        }
+        tracer.startSpan(annotation);
+        try {
+            return joinPoint.proceed();
+        }
+        finally {
+            tracer.finishSpan();
+        }
     }
 
-    private PerfLensTrace traceAnnotation(ProceedingJoinPoint joinPoint) {
+    private static PerfLensTrace annotationOf(ProceedingJoinPoint joinPoint) {
         if (!(joinPoint.getSignature() instanceof MethodSignature signature)) {
             return null;
         }
-        Method method = signature.getMethod();
         Class<?> targetClass = joinPoint.getTarget() == null
                 ? signature.getDeclaringType()
                 : AopUtils.getTargetClass(joinPoint.getTarget());
-        Method specificMethod = AopUtils.getMostSpecificMethod(method, targetClass);
-        PerfLensTrace methodAnnotation = AnnotatedElementUtils.findMergedAnnotation(specificMethod,
-                PerfLensTrace.class);
-        if (methodAnnotation != null) {
-            return methodAnnotation;
-        }
-        return AnnotatedElementUtils.findMergedAnnotation(targetClass, PerfLensTrace.class);
+        Method method = AopUtils.getMostSpecificMethod(signature.getMethod(), targetClass);
+        PerfLensTrace annotation = AnnotatedElementUtils.findMergedAnnotation(method, PerfLensTrace.class);
+        return annotation != null ? annotation
+                : AnnotatedElementUtils.findMergedAnnotation(targetClass, PerfLensTrace.class);
     }
 }
