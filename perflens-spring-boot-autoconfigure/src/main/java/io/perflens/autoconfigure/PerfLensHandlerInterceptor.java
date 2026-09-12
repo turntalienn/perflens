@@ -2,36 +2,33 @@ package io.perflens.autoconfigure;
 
 import io.perflens.core.annotation.PerfLensTrace;
 import io.perflens.core.context.PerfLensTraceContext;
-import io.perflens.core.context.TraceReport;
 import io.perflens.core.model.TraceBoundary;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import java.time.Clock;
+import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.web.method.HandlerMethod;
-import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.servlet.AsyncHandlerInterceptor;
+import org.springframework.web.servlet.DispatcherServlet;
 import org.springframework.web.servlet.HandlerMapping;
 
 /**
- * Spring MVC interceptor that keeps controller traces open through request
- * completion.
+ * Opens a trace before an annotated controller handler runs and closes it after
+ * the request completes, so SQL issued while rendering the response (lazy loading
+ * during JSON serialization, open-session-in-view) is included.
  *
- * <p>Closing in {@link #afterCompletion(HttpServletRequest, HttpServletResponse,
- * Object, Exception)} lets PerfLens include lazy loading that happens while the
- * response body is rendered, which a method-only aspect would miss.</p>
+ * <p>Requests that go async ({@code Callable}, {@code DeferredResult}) are not
+ * traced: their trace is discarded when the request thread is released.</p>
  */
-public final class PerfLensHandlerInterceptor implements HandlerInterceptor {
+final class PerfLensHandlerInterceptor implements AsyncHandlerInterceptor {
 
-    private static final String STARTED_ATTRIBUTE = PerfLensHandlerInterceptor.class.getName() + ".started";
+    private static final String STARTED = PerfLensHandlerInterceptor.class.getName() + ".started";
 
-    private final PerfLensControlService controlService;
-    private final PerfLensTraceStore traceStore;
-    private final Clock clock;
+    private final PerfLensTracer tracer;
+    private final boolean traceAllRequests;
 
-    public PerfLensHandlerInterceptor(PerfLensControlService controlService, PerfLensTraceStore traceStore,
-            Clock clock) {
-        this.controlService = controlService;
-        this.traceStore = traceStore;
-        this.clock = clock;
+    PerfLensHandlerInterceptor(PerfLensTracer tracer, boolean traceAllRequests) {
+        this.tracer = tracer;
+        this.traceAllRequests = traceAllRequests;
     }
 
     @Override
@@ -39,37 +36,42 @@ public final class PerfLensHandlerInterceptor implements HandlerInterceptor {
         if (!(handler instanceof HandlerMethod handlerMethod)) {
             return true;
         }
-        PerfLensTrace trace = traceAnnotation(handlerMethod);
-        if (trace == null || !controlService.isEnabled(trace.value())) {
-            return true;
+        Object pattern = request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
+        String route = pattern == null ? request.getRequestURI() : pattern.toString();
+        PerfLensTrace annotation = annotationOf(handlerMethod);
+        boolean started = annotation != null
+                ? tracer.startRoot(annotation, TraceBoundary.HTTP_REQUEST, route, request.getMethod())
+                : traceAllRequests && tracer.startRequest(request.getMethod() + " " + route, route, request.getMethod());
+        if (started) {
+            request.setAttribute(STARTED, Boolean.TRUE);
         }
-        String route = String.valueOf(request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE));
-        PerfLensTraceContext.startRoot(trace.value(), label(trace), TraceBoundary.HTTP_REQUEST, route,
-                request.getMethod(), clock);
-        request.setAttribute(STARTED_ATTRIBUTE, Boolean.TRUE);
         return true;
+    }
+
+    @Override
+    public void afterConcurrentHandlingStarted(HttpServletRequest request, HttpServletResponse response,
+            Object handler) {
+        if (request.getAttribute(STARTED) != null) {
+            request.removeAttribute(STARTED);
+            PerfLensTraceContext.discard();
+        }
     }
 
     @Override
     public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler,
             Exception exception) {
-        if (!Boolean.TRUE.equals(request.getAttribute(STARTED_ATTRIBUTE))) {
+        if (request.getAttribute(STARTED) == null) {
             return;
         }
-        String error = exception == null ? null : exception.getClass().getName();
-        TraceReport report = PerfLensTraceContext.closeRoot(response.getStatus(), error, clock);
-        traceStore.save(report);
+        request.removeAttribute(STARTED);
+        Throwable error = exception != null ? exception
+                : (Throwable) request.getAttribute(DispatcherServlet.EXCEPTION_ATTRIBUTE);
+        tracer.finishRoot(response.getStatus(), error);
     }
 
-    private PerfLensTrace traceAnnotation(HandlerMethod handlerMethod) {
-        PerfLensTrace methodAnnotation = handlerMethod.getMethodAnnotation(PerfLensTrace.class);
-        if (methodAnnotation != null) {
-            return methodAnnotation;
-        }
-        return handlerMethod.getBeanType().getAnnotation(PerfLensTrace.class);
-    }
-
-    private String label(PerfLensTrace trace) {
-        return trace.label().isBlank() ? trace.value() : trace.label();
+    private static PerfLensTrace annotationOf(HandlerMethod handlerMethod) {
+        PerfLensTrace annotation = handlerMethod.getMethodAnnotation(PerfLensTrace.class);
+        return annotation != null ? annotation
+                : AnnotatedElementUtils.findMergedAnnotation(handlerMethod.getBeanType(), PerfLensTrace.class);
     }
 }
