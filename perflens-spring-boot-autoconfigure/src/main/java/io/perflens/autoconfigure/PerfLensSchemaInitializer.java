@@ -3,31 +3,42 @@ package io.perflens.autoconfigure;
 import io.perflens.core.context.PerfLensTraceContext;
 import javax.sql.DataSource;
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 
 /**
- * Optional schema initializer for local development and tests.
- *
- * <p>The initializer is disabled by default so production applications do not
- * experience surprise DDL at startup. When enabled, it runs inside the PerfLens
- * ignore scope so schema creation is never counted as business API SQL.</p>
+ * Runs {@code META-INF/perflens/schema.sql} at startup when the PerfLens tables do
+ * not exist yet. Enabled by {@code perflens.storage.initialize-schema}.
  */
-public final class PerfLensSchemaInitializer implements InitializingBean {
+final class PerfLensSchemaInitializer implements InitializingBean {
 
-    private final JdbcTemplate jdbcTemplate;
-    private final PerfLensProperties properties;
+    static final String SCHEMA = "META-INF/perflens/schema.sql";
 
-    public PerfLensSchemaInitializer(DataSource dataSource, PerfLensProperties properties) {
-        this.jdbcTemplate = new JdbcTemplate(dataSource);
-        this.properties = properties;
+    private final DataSource dataSource;
+
+    PerfLensSchemaInitializer(DataSource dataSource) {
+        this.dataSource = dataSource;
     }
 
     @Override
     public void afterPropertiesSet() {
-        if (!properties.getStorage().isInitializeSchema()) {
-            return;
+        PerfLensTraceContext.runIgnoring(() -> {
+            if (!tablesExist()) {
+                new ResourceDatabasePopulator(new ClassPathResource(SCHEMA)).execute(dataSource);
+            }
+        });
+    }
+
+    private boolean tablesExist() {
+        try {
+            new JdbcTemplate(dataSource).queryForObject("select count(*) from perflens_trace where 1 = 0",
+                    Integer.class);
+            return true;
         }
-        PerfLensTraceContext.runIgnoring(() ->
-                PerfLensSchema.statements().forEach(jdbcTemplate::execute));
+        catch (DataAccessException ex) {
+            return false;
+        }
     }
 }
