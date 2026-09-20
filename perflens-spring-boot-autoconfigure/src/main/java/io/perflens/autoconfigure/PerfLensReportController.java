@@ -1,7 +1,13 @@
 package io.perflens.autoconfigure;
 
+import io.perflens.autoconfigure.JdbcTraceStore.StoredFinding;
+import io.perflens.autoconfigure.JdbcTraceStore.StoredHibernateEvent;
+import io.perflens.autoconfigure.JdbcTraceStore.StoredSql;
+import io.perflens.autoconfigure.JdbcTraceStore.StoredTrace;
 import jakarta.servlet.http.HttpServletRequest;
+import java.util.List;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -9,114 +15,152 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Read-only HTML report viewer for saved PerfLens traces.
+ * Read-only HTML pages for saved traces at {@code /perflens/reports}.
+ *
+ * <p>Only registered when {@code perflens.viewer.enabled=true}. By default the
+ * request must pass {@code isUserInRole(perflens.viewer.required-role)}; SQL text
+ * can contain business data, so keep it behind your security setup.</p>
  */
 @RestController
-@RequestMapping("/perflens")
-public final class PerfLensReportController {
+@RequestMapping(path = "/perflens/reports", produces = MediaType.TEXT_HTML_VALUE)
+final class PerfLensReportController {
 
-    private final PerfLensTraceStore traceStore;
-    private final PerfLensProperties properties;
+    private static final int LIST_LIMIT = 200;
+    private static final String STYLE = """
+            <style>
+            body{font:14px system-ui,sans-serif;margin:24px;color:#1b2430}
+            table{border-collapse:collapse;width:100%;margin-bottom:24px}
+            td,th{border:1px solid #d5dde5;padding:6px 8px;text-align:left;vertical-align:top}
+            th{background:#eef3f7}code{white-space:pre-wrap;word-break:break-word}
+            .CRITICAL{color:#b42318;font-weight:600}.WARNING{color:#b54708;font-weight:600}.INFO{color:#475467}
+            .num{text-align:right;white-space:nowrap}
+            </style>""";
 
-    public PerfLensReportController(PerfLensTraceStore traceStore, PerfLensProperties properties) {
-        this.traceStore = traceStore;
-        this.properties = properties;
+    private final JdbcTraceStore store;
+    private final PerfLensProperties.Viewer viewer;
+
+    PerfLensReportController(JdbcTraceStore store, PerfLensProperties properties) {
+        this.store = store;
+        this.viewer = properties.getViewer();
     }
 
-    /**
-     * Renders the recent trace list.
-     *
-     * @param request servlet request used for role checks
-     * @return HTML response or forbidden response
-     */
-    @GetMapping("/reports")
-    public ResponseEntity<String> reports(HttpServletRequest request) {
+    @GetMapping
+    ResponseEntity<String> list(HttpServletRequest request) {
         if (!authorized(request)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body("PerfLens viewer access denied");
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Forbidden");
         }
-        StringBuilder html = new StringBuilder();
-        html.append("<!doctype html><html><head><title>PerfLens Reports</title>");
-        html.append("<style>body{font-family:Arial,sans-serif;margin:32px;color:#17212b}");
-        html.append("table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccd6e0;padding:8px}");
-        html.append("th{background:#edf3f8;text-align:left}</style></head><body>");
-        html.append("<h1>PerfLens Reports</h1>");
-        html.append("<table><tr><th>Trace</th><th>Target</th><th>Route</th><th>Duration</th><th>SQL</th></tr>");
-        for (PerfLensTraceStore.StoredTrace trace : traceStore.findRecentTraces(100)) {
-            html.append("<tr><td><a href=\"/perflens/reports/").append(escape(trace.traceId())).append("\">");
-            html.append(escape(trace.traceId())).append("</a></td><td>").append(escape(trace.targetKey()));
-            html.append("</td><td>").append(escape(trace.route())).append("</td><td>");
-            html.append(trace.durationMillis()).append(" ms</td><td>").append(trace.queryCount()).append("</td></tr>");
+        StringBuilder html = page("PerfLens traces");
+        html.append("<table><tr><th>Started</th><th>Target</th><th>Request</th><th class=num>Duration</th>")
+                .append("<th class=num>SQL</th><th class=num>Tx</th><th class=num>Heap</th><th>Findings</th></tr>");
+        for (StoredTrace trace : store.findRecentTraces(LIST_LIMIT)) {
+            html.append("<tr><td><a href=\"reports/").append(escape(trace.traceId())).append("\">")
+                    .append(trace.startedAt()).append("</a></td><td>").append(escape(trace.targetKey()))
+                    .append("</td><td>").append(request(trace)).append("</td><td class=num>")
+                    .append(ms(trace.durationMillis())).append("</td><td class=num>").append(trace.sqlCount())
+                    .append("</td><td class=num>").append(trace.transactionCount()).append("</td><td class=num>")
+                    .append(trace.allocatedBytes() < 0 ? "" : String.format("%.1f MB",
+                            trace.allocatedBytes() / (1024.0 * 1024)))
+                    .append("</td><td>");
+            if (trace.findingCount() > 0) {
+                html.append("<span class=").append(escape(trace.maxSeverity())).append('>')
+                        .append(trace.findingCount()).append(' ').append(escape(trace.maxSeverity()))
+                        .append("</span>");
+            }
+            html.append("</td></tr>");
         }
-        html.append("</table></body></html>");
-        return ResponseEntity.ok(html.toString());
+        return ResponseEntity.ok(html.append("</table></body></html>").toString());
     }
 
-    /**
-     * Renders a single trace report as plain HTML.
-     *
-     * @param traceId trace id
-     * @param request servlet request used for role checks
-     * @return HTML response, forbidden response, or not-found response
-     */
-    @GetMapping("/reports/{traceId}")
-    public ResponseEntity<String> report(@PathVariable("traceId") String traceId, HttpServletRequest request) {
+    @GetMapping("/{traceId}")
+    ResponseEntity<String> detail(@PathVariable("traceId") String traceId, HttpServletRequest request) {
         if (!authorized(request)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body("PerfLens viewer access denied");
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Forbidden");
         }
-        return traceStore.findTrace(traceId)
+        return store.findTrace(traceId)
                 .map(trace -> ResponseEntity.ok(render(trace)))
                 .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body("Trace not found"));
     }
 
-    private boolean authorized(HttpServletRequest request) {
-        return !properties.getViewer().isRequireRole()
-                || request.isUserInRole(properties.getViewer().getRequiredRole());
-    }
-
-    private String render(PerfLensTraceStore.StoredTrace trace) {
-        StringBuilder html = new StringBuilder();
-        html.append("<!doctype html><html><head><title>PerfLens Trace Report</title>");
-        html.append("<style>body{font-family:Arial,sans-serif;margin:32px;color:#17212b}");
-        html.append("table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccd6e0;padding:8px}");
-        html.append("th{background:#edf3f8;text-align:left}</style></head><body>");
-        html.append("<h1>PerfLens Trace Report</h1>");
-        html.append("<p><strong>Trace:</strong> ").append(escape(trace.traceId())).append("</p>");
-        html.append("<p><strong>Target:</strong> ").append(escape(trace.targetKey())).append("</p>");
-        html.append("<p><strong>Route:</strong> ").append(escape(trace.route())).append("</p>");
-        html.append("<p><strong>Duration:</strong> ").append(trace.durationMillis()).append(" ms</p>");
-        html.append("<h2>Summary</h2><table><tr><th>SQL Events</th><th>Hibernate Events</th><th>Findings</th></tr>");
-        html.append("<tr><td>").append(trace.queryCount()).append("</td><td>").append(trace.hibernateEventCount());
-        html.append("</td><td>").append(trace.findingCount()).append("</td></tr></table>");
-        html.append("<h2>SQL Events</h2><table><tr><th>#</th><th>Duration</th><th>SQL</th></tr>");
-        for (PerfLensTraceStore.StoredSqlEvent event : traceStore.findSqlEvents(trace.traceId())) {
-            html.append("<tr><td>").append(event.ordinal()).append("</td><td>").append(event.durationMillis());
-            html.append(" ms</td><td><code>").append(escape(event.sql())).append("</code></td></tr>");
+    private String render(StoredTrace trace) {
+        StringBuilder html = page("PerfLens trace " + trace.targetKey());
+        html.append("<p><a href=\"../reports\">All traces</a></p><table>");
+        row(html, "Trace", escape(trace.traceId()));
+        row(html, "Request", request(trace));
+        row(html, "Started", trace.startedAt().toString());
+        row(html, "Duration", ms(trace.durationMillis()));
+        row(html, "SQL", trace.sqlCount() + " statements, " + ms(trace.sqlMillis()));
+        row(html, "Transactions / connections", trace.transactionCount() + " / " + trace.connectionCount());
+        row(html, "Entities loaded", String.valueOf(trace.entityLoadCount()));
+        if (trace.allocatedBytes() >= 0) {
+            row(html, "Heap allocated", String.format("%.1f MB", trace.allocatedBytes() / (1024.0 * 1024)));
+            row(html, "CPU", ms(trace.cpuMicros() / 1000.0));
+        }
+        row(html, "GC during request (JVM-wide)", trace.gcCount() + " pauses, " + trace.gcMillis() + " ms");
+        if (trace.errorMessage() != null) {
+            row(html, "Error", escape(trace.errorMessage()));
+        }
+        if (trace.droppedEvents() > 0) {
+            row(html, "Dropped events", trace.droppedEvents() + " (per-trace cap reached)");
         }
         html.append("</table>");
-        html.append("<h2>Hibernate Events</h2><table>");
-        html.append("<tr><th>#</th><th>Type</th><th>Entity</th><th>Collection</th><th>Detail</th></tr>");
-        for (PerfLensTraceStore.StoredHibernateEvent event : traceStore.findHibernateEvents(trace.traceId())) {
-            html.append("<tr><td>").append(event.ordinal()).append("</td><td>").append(escape(event.eventType()));
-            html.append("</td><td>").append(escape(event.entityName())).append("</td><td>");
-            html.append(escape(event.collectionRole())).append("</td><td>").append(escape(event.detail()));
+
+        List<StoredFinding> findings = store.findFindings(trace.traceId());
+        html.append("<h2>Findings</h2><table><tr><th>Severity</th><th>Type</th><th>Message</th><th>Evidence</th></tr>");
+        for (StoredFinding finding : findings) {
+            html.append("<tr><td class=").append(escape(finding.severity())).append('>')
+                    .append(escape(finding.severity())).append("</td><td>").append(escape(finding.type()))
+                    .append("</td><td>").append(escape(finding.message())).append("</td><td><code>")
+                    .append(escape(finding.evidence())).append("</code></td></tr>");
+        }
+        html.append("</table><h2>SQL</h2><table><tr><th>#</th><th class=num>Time</th><th>Statement</th></tr>");
+        for (StoredSql sql : store.findSql(trace.traceId())) {
+            html.append("<tr><td>").append(sql.seq()).append("</td><td class=num>").append(ms(sql.durationMillis()))
+                    .append("</td><td><code>").append(escape(sql.sql())).append("</code>");
+            if (!sql.success()) {
+                html.append("<br><span class=CRITICAL>").append(escape(sql.errorMessage())).append("</span>");
+            }
             html.append("</td></tr>");
         }
-        html.append("</table>");
-        html.append("<h2>Findings</h2><table>");
-        html.append("<tr><th>Severity</th><th>Type</th><th>Message</th><th>Evidence</th></tr>");
-        for (PerfLensTraceStore.StoredFinding finding : traceStore.findFindings(trace.traceId())) {
-            html.append("<tr><td>").append(escape(finding.severity())).append("</td><td>");
-            html.append(escape(finding.type())).append("</td><td>").append(escape(finding.message()));
-            html.append("</td><td>").append(escape(finding.evidence())).append("</td></tr>");
+        html.append("</table><h2>Hibernate</h2><table>")
+                .append("<tr><th>#</th><th>Event</th><th>Entity / collection</th><th>Detail</th></tr>");
+        for (StoredHibernateEvent event : store.findHibernateEvents(trace.traceId())) {
+            String subject = event.entityName() != null ? event.entityName() : event.collectionRole();
+            html.append("<tr><td>").append(event.seq()).append("</td><td>").append(escape(event.eventType()))
+                    .append("</td><td>").append(escape(subject)).append("</td><td>").append(escape(event.detail()))
+                    .append("</td></tr>");
         }
-        html.append("</table></body></html>");
-        return html.toString();
+        return html.append("</table></body></html>").toString();
     }
 
-    private String escape(String value) {
+    private boolean authorized(HttpServletRequest request) {
+        return !viewer.isRequireRole() || request.isUserInRole(viewer.getRequiredRole());
+    }
+
+    private static StringBuilder page(String title) {
+        return new StringBuilder("<!doctype html><html><head><meta charset=utf-8><title>").append(escape(title))
+                .append("</title>").append(STYLE).append("</head><body><h1>").append(escape(title)).append("</h1>");
+    }
+
+    private static void row(StringBuilder html, String name, String value) {
+        html.append("<tr><th>").append(name).append("</th><td>").append(value).append("</td></tr>");
+    }
+
+    private static String request(StoredTrace trace) {
+        if (trace.httpMethod() == null) {
+            return "method call";
+        }
+        return escape(trace.httpMethod() + " " + trace.route()) + " &rarr; " + trace.statusCode();
+    }
+
+    private static String ms(double millis) {
+        return String.format("%.1f ms", millis);
+    }
+
+    private static String escape(String value) {
         if (value == null) {
             return "";
         }
-        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+                .replace("'", "&#39;");
     }
 }
