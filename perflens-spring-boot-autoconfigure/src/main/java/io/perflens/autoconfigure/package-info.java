@@ -1,8 +1,6 @@
 /**
- * Spring Boot auto-configuration and runtime adapters for PerfLens.
- *
- * <p>The classes in this package connect the Spring MVC request lifecycle,
- * Spring AOP, JDBC, Hibernate, storage, and the optional HTML viewer. They are
- * kept outside {@code perflens-core} so the core model remains framework-neutral.</p>
+ * Spring Boot auto-configuration and the Spring-specific collectors: the JDBC
+ * proxy, the Hibernate listener, the MVC interceptor, the AOP aspect, report
+ * listeners (log, database) and the HTML viewer.
  */
 package io.perflens.autoconfigure;
