@@ -1,0 +1,17 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:demo;DB_CLOSE_DELAY=-1
+  jpa:
+    open-in-view: false
+    defer-datasource-initialization: true
+
+perflens:
+  control:
+    targets: "*"
+  storage:
+    enabled: true
+    initialize-schema: true
+  viewer:
+    enabled: true
+    # Demo only. Keep the role check on anywhere real data is involved.
+    require-role: false
